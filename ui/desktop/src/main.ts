@@ -762,7 +762,8 @@ app.on('open-url', async (_event, url) => {
 app.on('will-finish-launching', () => {
   if (process.platform === 'darwin') {
     app.setAboutPanelOptions({
-      applicationName: 'Goose',
+      applicationName: 'Optispan Assistant',
+      copyright: 'Optispan · Built on Goose (Apache-2.0)',
       applicationVersion: app.getVersion(),
     });
   }
@@ -817,7 +818,7 @@ async function handleFileOpen(filePath: string) {
 
     // Show user-friendly error notification
     new Notification({
-      title: 'Goose',
+      title: 'Optispan Assistant',
       body: `Could not open directory: ${path.basename(filePath)}`,
     }).show();
   }
@@ -1227,7 +1228,7 @@ const createChat = async (
       log.error('goose serve failed to start', error);
       dialog.showMessageBoxSync({
         type: 'error',
-        title: 'Goose Failed to Start',
+        title: 'Optispan Assistant Failed to Start',
         message: 'The backend server failed to start.',
         detail: [
           'Backend: goose serve',
@@ -2553,7 +2554,7 @@ async function appMain() {
 
   const shortcuts = getKeyboardShortcuts(settings);
 
-  const appMenu = menu?.items.find((item) => item.label === 'Goose');
+  const appMenu = menu?.items.find((item) => item.label === 'Optispan Assistant');
   if (appMenu?.submenu) {
     appMenu.submenu.insert(1, new MenuItem({ type: 'separator' }));
     if (shortcuts.settings) {
@@ -2788,23 +2789,22 @@ async function appMain() {
         helpMenu.submenu.append(new MenuItem({ type: 'separator' }));
       }
 
-      // Create the About Goose menu item with a submenu
-      const aboutGooseMenuItem = new MenuItem({
-        label: menuT('About Goose'),
-        submenu: Menu.buildFromTemplate([]), // Start with an empty submenu for About
+      // Create a clickable "About" item that opens a proper dialog.
+      // (setAboutPanelOptions only surfaces on macOS, so Windows/Linux need this.)
+      const aboutMenuItem = new MenuItem({
+        label: 'About Optispan Assistant',
+        click: () => {
+          dialog.showMessageBox({
+            type: 'info',
+            title: 'About Optispan Assistant',
+            message: 'Optispan Assistant',
+            detail: `Version ${version || app.getVersion()}\n\nOptispan · Built on Goose (Apache-2.0)`,
+            buttons: ['OK'],
+          });
+        },
       });
 
-      // Add the Version menu item (display only) to the About Goose submenu
-      if (aboutGooseMenuItem.submenu) {
-        aboutGooseMenuItem.submenu.append(
-          new MenuItem({
-            label: `Version ${version || app.getVersion()}`,
-            enabled: false,
-          })
-        );
-      }
-
-      helpMenu.submenu.append(aboutGooseMenuItem);
+      helpMenu.submenu.append(aboutMenuItem);
     }
   }
 
