@@ -5490,6 +5490,7 @@ dependencies = [
  "lopdf",
  "once_cell",
  "process-wrap",
+ "reqwest 0.13.4",
  "rmcp 3.1.4",
  "schemars 1.2.2",
  "serde",
