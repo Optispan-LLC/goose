@@ -2399,6 +2399,13 @@ ipcMain.handle('list-files', async (_event, dirPath, extension) => {
     // Expand tilde to home directory
     const expandedPath = expandTilde(dirPath);
 
+    // A stale recent/working-dir entry can point at a file (e.g. a .csv); readdir
+    // then throws ENOTDIR and spams the log. Treat "not a directory" as empty.
+    const stat = await fs.stat(expandedPath).catch(() => null);
+    if (!stat || !stat.isDirectory()) {
+      return [];
+    }
+
     const files = await fs.readdir(expandedPath);
     if (extension) {
       return files.filter((file) => file.endsWith(extension));
@@ -3199,10 +3206,16 @@ function openIrisLoginWindow(): void {
     resizable: false,
     minimizable: false,
     maximizable: false,
+    alwaysOnTop: true,
     title: 'Sign in to Iris',
     webPreferences: { preload: path.join(__dirname, 'preload.js') },
   });
   irisLoginWindow.setMenuBarVisibility(false);
+  // Keep it above the main window, which is created around the same time.
+  irisLoginWindow.once('ready-to-show', () => {
+    irisLoginWindow?.show();
+    irisLoginWindow?.focus();
+  });
   irisLoginWindow.on('closed', () => {
     irisLoginWindow = null;
   });
