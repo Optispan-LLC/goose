@@ -3166,8 +3166,14 @@ app.whenReady().then(async () => {
 
 // Iris sign-in (distro item #3): restore a live staff ID token from the stored
 // refresh token at startup, and expose the sign-in/out IPC the login window uses.
-app.whenReady().then(() => {
-  void irisAuth.initOnStartup();
+// The native Help menu is unreliable here (Menu.getApplicationMenu() is null when
+// the app never set one), so if there's no live session we open the login window
+// directly. Once signed in, the stored refresh token suppresses this.
+app.whenReady().then(async () => {
+  await irisAuth.initOnStartup();
+  if (!irisAuth.status().signedIn) {
+    openIrisLoginWindow();
+  }
 });
 
 ipcMain.handle('iris-auth-signin', async (_event, email: string, password: string) => {
