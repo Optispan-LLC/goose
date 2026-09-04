@@ -31,6 +31,11 @@ import type { ProviderDetails, ProviderType, ThinkingEffort } from '../../../../
 import { trackModelChanged } from '../../../../utils/analytics';
 import { addToRecentModels } from '../../../../utils/recentModels';
 
+// Optispan distro: hide the agent-CLI wrapper providers from the picker.
+const HIDDEN_PROVIDER_IDS = new Set(['claude-code', 'codex', 'cursor-agent', 'gemini-cli']);
+// Optispan distro: under GCP Vertex AI, offer only Gemini models.
+const VERTEX_PROVIDER_ID = 'gcp_vertex_ai';
+
 const i18n = defineMessages({
   thinkingEffortOff: {
     id: 'switchModelModal.thinkingEffortOff',
@@ -488,7 +493,9 @@ export const SwitchModelModal = ({
     (async () => {
       try {
         const providersResponse = await acpListProviderDetails();
-        const activeProviders = providersResponse.filter((provider) => provider.is_configured);
+        const activeProviders = providersResponse
+          .filter((provider) => provider.is_configured)
+          .filter((provider) => !HIDDEN_PROVIDER_IDS.has(provider.name));
         setActiveProvidersList(activeProviders);
         setProviderOptions([
           ...activeProviders.map(({ metadata, name }) => ({
@@ -540,7 +547,11 @@ export const SwitchModelModal = ({
             return;
           }
 
-          const modelList = models || [];
+          let modelList = models || [];
+          // Optispan distro: under GCP Vertex AI, show only Gemini models.
+          if (p.name === VERTEX_PROVIDER_ID) {
+            modelList = modelList.filter((m) => m.name.toLowerCase().startsWith('gemini'));
+          }
 
           const options: {
             value: string;
