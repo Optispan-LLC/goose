@@ -31,8 +31,14 @@ import type { ProviderDetails, ProviderType, ThinkingEffort } from '../../../../
 import { trackModelChanged } from '../../../../utils/analytics';
 import { addToRecentModels } from '../../../../utils/recentModels';
 
-// Optispan distro: hide the agent-CLI wrapper providers from the picker.
-const HIDDEN_PROVIDER_IDS = new Set(['claude-code', 'codex', 'cursor-agent', 'gemini-cli']);
+// Optispan distro: hide the agent-CLI wrapper providers and OpenAI from the picker.
+const HIDDEN_PROVIDER_IDS = new Set([
+  'claude-code',
+  'codex',
+  'cursor-agent',
+  'gemini-cli',
+  'openai',
+]);
 // Optispan distro: under GCP Vertex AI, offer only Gemini models.
 const VERTEX_PROVIDER_ID = 'gcp_vertex_ai';
 
