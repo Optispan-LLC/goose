@@ -63,6 +63,18 @@ pub struct FileDocumentParams {
     pub category: Option<String>,
 }
 
+/// True for a canonical 8-4-4-4-12 hex UUID (Apollo document ids). Guards against
+/// path/query injection when a document_id is interpolated into a URL.
+fn is_uuid(s: &str) -> bool {
+    let groups = [8, 4, 4, 4, 12];
+    let parts: Vec<&str> = s.split('-').collect();
+    parts.len() == 5
+        && parts
+            .iter()
+            .zip(groups)
+            .all(|(p, n)| p.len() == n && p.bytes().all(|b| b.is_ascii_hexdigit()))
+}
+
 fn mime_from_path(path: &str) -> &'static str {
     let lower = path.to_ascii_lowercase();
     match lower.rsplit('.').next() {
@@ -269,10 +281,20 @@ impl IrisServer {
         &self,
         params: Parameters<GetDocumentParams>,
     ) -> Result<CallToolResult, ErrorData> {
+        // Validate the document_id is a bare UUID before interpolating it into
+        // the URL — rejects any path/query-injection ("../x", "id?patient_id=..").
+        if !is_uuid(params.0.document_id.trim()) {
+            return Err(ErrorData::new(
+                ErrorCode::INVALID_PARAMS,
+                "document_id must be a UUID (from iris_list_documents)".to_string(),
+                None,
+            ));
+        }
         // patient_id in the query so the server's per-patient authz applies.
         let path = format!(
             "/document-storage-api/{}/download?patient_id={}",
-            params.0.document_id, params.0.patient_id
+            params.0.document_id.trim(),
+            params.0.patient_id
         );
         let v = self.api_get(&path).await?;
         Ok(CallToolResult::success(vec![ContentBlock::text(v.to_string())]))
