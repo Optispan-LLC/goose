@@ -67,12 +67,13 @@ pub struct FileDocumentParams {
 /// error bodies can carry PHI; error strings may reach telemetry/logs, so keep
 /// only a short, bounded prefix for debugging rather than the whole body.
 fn err_snippet(body: &str) -> String {
-    const MAX: usize = 200;
+    const MAX: usize = 200; // max chars, not bytes
     let trimmed = body.trim();
-    if trimmed.len() <= MAX {
-        trimmed.to_string()
-    } else {
-        format!("{}… (truncated)", &trimmed[..MAX])
+    // nth(MAX) yields a valid char-boundary byte index, so the slice never
+    // splits a multi-byte UTF-8 char (which would panic).
+    match trimmed.char_indices().nth(MAX) {
+        Some((idx, _)) => format!("{}… (truncated)", &trimmed[..idx]),
+        None => trimmed.to_string(),
     }
 }
 
@@ -322,22 +323,25 @@ impl IrisServer {
         params: Parameters<FileDocumentParams>,
     ) -> Result<CallToolResult, ErrorData> {
         let p = params.0;
-        // Bound the read: check size via metadata before loading into memory, so
-        // a huge/unexpected file can't OOM the process or balloon an upload.
+        // Bound the actual read (not just a metadata pre-check, which can lie for
+        // special files or race the read): read at most MAX+1 bytes and reject if
+        // it overflows, so a huge/unexpected file can't OOM the process.
         const MAX_UPLOAD_BYTES: u64 = 25 * 1024 * 1024; // 25 MB
-        let meta = std::fs::metadata(&p.file_path).map_err(|e| {
-            ErrorData::new(ErrorCode::INVALID_PARAMS, format!("cannot stat file '{}': {e}", p.file_path), None)
+        use std::io::Read as _;
+        let file = std::fs::File::open(&p.file_path).map_err(|e| {
+            ErrorData::new(ErrorCode::INVALID_PARAMS, format!("cannot open file '{}': {e}", p.file_path), None)
         })?;
-        if meta.len() > MAX_UPLOAD_BYTES {
+        let mut bytes = Vec::new();
+        file.take(MAX_UPLOAD_BYTES + 1)
+            .read_to_end(&mut bytes)
+            .map_err(|e| ErrorData::new(ErrorCode::INVALID_PARAMS, format!("cannot read file '{}': {e}", p.file_path), None))?;
+        if bytes.len() as u64 > MAX_UPLOAD_BYTES {
             return Err(ErrorData::new(
                 ErrorCode::INVALID_PARAMS,
-                format!("file is {} bytes; the {}-byte upload limit is exceeded", meta.len(), MAX_UPLOAD_BYTES),
+                format!("file exceeds the {}-byte upload limit", MAX_UPLOAD_BYTES),
                 None,
             ));
         }
-        let bytes = std::fs::read(&p.file_path).map_err(|e| {
-            ErrorData::new(ErrorCode::INVALID_PARAMS, format!("cannot read file '{}': {e}", p.file_path), None)
-        })?;
         let filename = std::path::Path::new(&p.file_path)
             .file_name()
             .and_then(|n| n.to_str())
