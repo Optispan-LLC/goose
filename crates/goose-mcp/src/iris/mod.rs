@@ -205,20 +205,6 @@ impl IrisServer {
     }
 
     #[tool(
-        name = "iris_get_biological_age",
-        description = "LinAge biological age for a patient (Apollo /optiage): biological vs chronological age and the delta. Arg: patient_id."
-    )]
-    pub async fn iris_get_biological_age(
-        &self,
-        params: Parameters<PatientIdParams>,
-    ) -> Result<CallToolResult, ErrorData> {
-        let v = self
-            .api_get(&format!("/optiage?patient_id={}", params.0.patient_id))
-            .await?;
-        Ok(CallToolResult::success(vec![ContentBlock::text(v.to_string())]))
-    }
-
-    #[tool(
         name = "iris_get_dexa",
         description = "Most recent DEXA body-composition scan for a patient (Apollo /dexa). Arg: patient_id."
     )]
@@ -424,7 +410,7 @@ impl ServerHandler for IrisServer {
             .with_instructions(
                 "Optispan Iris clinical-data tools. ALWAYS resolve the patient first with \
                  iris_find_patient to get the patient_id, then pass that explicit patient_id \
-                 to the other tools (never assume it). Reads (biological age, DEXA, documents) \
+                 to the other tools (never assume it). Reads (DEXA, labs, documents, ...) \
                  go through the Apollo API, which enforces staff access and auditing. \
                  iris_file_document is a chart WRITE and will ask for confirmation."
                     .to_string(),
