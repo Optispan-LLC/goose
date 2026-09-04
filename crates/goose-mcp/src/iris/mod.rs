@@ -63,6 +63,19 @@ pub struct FileDocumentParams {
     pub category: Option<String>,
 }
 
+/// Cap an upstream response body before putting it in an error string. Apollo
+/// error bodies can carry PHI; error strings may reach telemetry/logs, so keep
+/// only a short, bounded prefix for debugging rather than the whole body.
+fn err_snippet(body: &str) -> String {
+    const MAX: usize = 200;
+    let trimmed = body.trim();
+    if trimmed.len() <= MAX {
+        trimmed.to_string()
+    } else {
+        format!("{}… (truncated)", &trimmed[..MAX])
+    }
+}
+
 /// True for a canonical 8-4-4-4-12 hex UUID (Apollo document ids). Guards against
 /// path/query injection when a document_id is interpolated into a URL.
 fn is_uuid(s: &str) -> bool {
@@ -158,7 +171,7 @@ impl IrisServer {
         if !status.is_success() {
             return Err(ErrorData::new(
                 ErrorCode::INTERNAL_ERROR,
-                format!("Apollo returned {status}: {body}"),
+                format!("Apollo returned {status}: {}", err_snippet(&body)),
                 None,
             ));
         }
@@ -183,7 +196,7 @@ impl IrisServer {
         let status = resp.status();
         let text = resp.text().await.unwrap_or_default();
         if !status.is_success() {
-            return Err(ErrorData::new(ErrorCode::INTERNAL_ERROR, format!("Apollo returned {status}: {text}"), None));
+            return Err(ErrorData::new(ErrorCode::INTERNAL_ERROR, format!("Apollo returned {status}: {}", err_snippet(&text)), None));
         }
         serde_json::from_str(&text).map_err(|e| {
             ErrorData::new(ErrorCode::INTERNAL_ERROR, format!("invalid JSON from Apollo: {e}"), None)
@@ -309,6 +322,19 @@ impl IrisServer {
         params: Parameters<FileDocumentParams>,
     ) -> Result<CallToolResult, ErrorData> {
         let p = params.0;
+        // Bound the read: check size via metadata before loading into memory, so
+        // a huge/unexpected file can't OOM the process or balloon an upload.
+        const MAX_UPLOAD_BYTES: u64 = 25 * 1024 * 1024; // 25 MB
+        let meta = std::fs::metadata(&p.file_path).map_err(|e| {
+            ErrorData::new(ErrorCode::INVALID_PARAMS, format!("cannot stat file '{}': {e}", p.file_path), None)
+        })?;
+        if meta.len() > MAX_UPLOAD_BYTES {
+            return Err(ErrorData::new(
+                ErrorCode::INVALID_PARAMS,
+                format!("file is {} bytes; the {}-byte upload limit is exceeded", meta.len(), MAX_UPLOAD_BYTES),
+                None,
+            ));
+        }
         let bytes = std::fs::read(&p.file_path).map_err(|e| {
             ErrorData::new(ErrorCode::INVALID_PARAMS, format!("cannot read file '{}': {e}", p.file_path), None)
         })?;
@@ -350,7 +376,7 @@ impl IrisServer {
         if !put.status().is_success() {
             let s = put.status();
             let b = put.text().await.unwrap_or_default();
-            return Err(ErrorData::new(ErrorCode::INTERNAL_ERROR, format!("GCS upload returned {s}: {b}"), None));
+            return Err(ErrorData::new(ErrorCode::INTERNAL_ERROR, format!("GCS upload returned {s}: {}", err_snippet(&b)), None));
         }
 
         // 3. complete -> persist metadata.
