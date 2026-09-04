@@ -31,14 +31,12 @@ import type { ProviderDetails, ProviderType, ThinkingEffort } from '../../../../
 import { trackModelChanged } from '../../../../utils/analytics';
 import { addToRecentModels } from '../../../../utils/recentModels';
 
-// Optispan distro: hide the agent-CLI wrapper providers and OpenAI from the picker.
-const HIDDEN_PROVIDER_IDS = new Set([
-  'claude-code',
-  'codex',
-  'cursor-agent',
-  'gemini-cli',
-  'openai',
-]);
+// Optispan distro: the model picker offers only BAA-covered or local providers —
+// GCP Vertex AI (Gemini, BAA) plus the local runners (Ollama, llama.cpp). Every
+// other provider routes prompts to a third party not covered by the BAA, so it
+// is hidden from the picker. Allowlist, not denylist, so upstream additions of
+// new remote providers don't leak in.
+const ALLOWED_PROVIDER_IDS = new Set(['gcp_vertex_ai', 'ollama', 'local']);
 // Optispan distro: under GCP Vertex AI, offer only Gemini models.
 const VERTEX_PROVIDER_ID = 'gcp_vertex_ai';
 
@@ -501,7 +499,7 @@ export const SwitchModelModal = ({
         const providersResponse = await acpListProviderDetails();
         const activeProviders = providersResponse
           .filter((provider) => provider.is_configured)
-          .filter((provider) => !HIDDEN_PROVIDER_IDS.has(provider.name));
+          .filter((provider) => ALLOWED_PROVIDER_IDS.has(provider.name));
         setActiveProvidersList(activeProviders);
         setProviderOptions([
           ...activeProviders.map(({ metadata, name }) => ({
