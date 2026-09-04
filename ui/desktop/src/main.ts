@@ -181,6 +181,24 @@ function translateMenuLabels(items: MenuItem[]): void {
 // Settings management
 const SETTINGS_FILE = path.join(app.getPath('userData'), 'settings.json');
 const STARTUP_LOGS_DIR = path.join(app.getPath('userData'), 'logs', 'startup');
+
+// Optispan Iris built-in wiring. goosed inherits the desktop's process.env
+// (see buildGooseServeEnv), so set these defaults here — before goosed spawns —
+// rather than in config.yaml, which the in-process built-in cannot read (it uses
+// std::env::var; goose-mcp can't depend on goose's Config without a dep cycle).
+//   IRIS_API_BASE        the iris-agent-gateway (forwards to Apollo with App Check
+//                        exemption); the built-in appends /optiage, /dexa, ...
+//   IRIS_STAFF_TOKEN_FILE stable path the staff Firebase ID token is written to
+//                        (by the sign-in refresh loop); the built-in reads it per
+//                        call so refreshes are picked up without restarting goosed.
+// Both are overridable by an already-set env var.
+const IRIS_GOOSE_CONFIG_DIR = path.join(app.getPath('appData'), 'Block', 'goose', 'config');
+if (!process.env.IRIS_API_BASE) {
+  process.env.IRIS_API_BASE = 'https://iris-agent-gateway-878557496335.us-west1.run.app/iris';
+}
+if (!process.env.IRIS_STAFF_TOKEN_FILE) {
+  process.env.IRIS_STAFF_TOKEN_FILE = path.join(IRIS_GOOSE_CONFIG_DIR, 'iris_staff_token');
+}
 const validLanguageSettings = new Set<Settings['language']>([
   'system',
   'en',
