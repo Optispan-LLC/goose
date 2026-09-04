@@ -32,7 +32,12 @@ pub struct IrisServer {
     tool_router: ToolRouter<Self>,
     http: reqwest::Client,
     api_base: String,
+    /// Fallback bearer token from IRIS_STAFF_TOKEN (env, captured at startup).
     token: Option<String>,
+    /// Path from IRIS_STAFF_TOKEN_FILE holding the current staff token. Read
+    /// fresh on each request so the desktop can refresh the token in place
+    /// without restarting goosed; takes precedence over `token` when non-empty.
+    token_file: Option<String>,
 }
 
 impl Default for IrisServer {
@@ -49,7 +54,23 @@ impl IrisServer {
             http: reqwest::Client::new(),
             api_base: std::env::var("IRIS_API_BASE").unwrap_or_default(),
             token: std::env::var("IRIS_STAFF_TOKEN").ok().filter(|t| !t.is_empty()),
+            token_file: std::env::var("IRIS_STAFF_TOKEN_FILE").ok().filter(|t| !t.is_empty()),
         }
+    }
+
+    /// Resolve the current staff bearer token. Prefers IRIS_STAFF_TOKEN_FILE,
+    /// read fresh on each call so the desktop's periodic refresh is picked up
+    /// without restarting goosed; falls back to the IRIS_STAFF_TOKEN env value.
+    fn current_token(&self) -> Option<String> {
+        if let Some(path) = &self.token_file {
+            if let Ok(contents) = std::fs::read_to_string(path) {
+                let trimmed = contents.trim();
+                if !trimmed.is_empty() {
+                    return Some(trimmed.to_string());
+                }
+            }
+        }
+        self.token.clone()
     }
 
     /// Authenticated GET against the Apollo API, returning the parsed JSON body.
@@ -63,7 +84,7 @@ impl IrisServer {
         }
         let url = format!("{}{}", self.api_base.trim_end_matches('/'), path);
         let mut req = self.http.get(&url);
-        if let Some(t) = &self.token {
+        if let Some(t) = self.current_token() {
             req = req.bearer_auth(t);
         }
         let resp = req.send().await.map_err(|e| {
