@@ -30,6 +30,7 @@ import { checkBackendStatus } from './backendStatus';
 import { installBackendCertificateVerifiers } from './backendCertificateVerifier';
 import { configureProxy } from './proxy';
 import { startGooseServe } from './gooseServe';
+import * as irisAuth from './irisAuth';
 import { getLoginShellPath } from './loginShellPath';
 import { GooseServeLeaseRegistry, type GooseServeLease } from './gooseServeLeaseRegistry';
 import { acpWebSocketUrlFromHttpBase, normalizeAcpHttpBaseUrl } from './acp/url';
@@ -2807,6 +2808,15 @@ async function appMain() {
         helpMenu.submenu.append(new MenuItem({ type: 'separator' }));
       }
 
+      // Iris staff sign-in (distro item #3) — opens the login window.
+      helpMenu.submenu.append(
+        new MenuItem({
+          label: 'Sign in to Iris…',
+          click: () => openIrisLoginWindow(),
+        })
+      );
+      helpMenu.submenu.append(new MenuItem({ type: 'separator' }));
+
       // Create a clickable "About" item that opens a proper dialog.
       // (setAboutPanelOptions only surfaces on macOS, so Windows/Linux need this.)
       const aboutMenuItem = new MenuItem({
@@ -3152,6 +3162,109 @@ app.whenReady().then(async () => {
     dialog.showErrorBox('Goose Error', `Failed to create main window: ${error}`);
     app.quit();
   }
+});
+
+// Iris sign-in (distro item #3): restore a live staff ID token from the stored
+// refresh token at startup, and expose the sign-in/out IPC the login window uses.
+app.whenReady().then(() => {
+  void irisAuth.initOnStartup();
+});
+
+ipcMain.handle('iris-auth-signin', async (_event, email: string, password: string) => {
+  return irisAuth.signIn(email, password);
+});
+ipcMain.handle('iris-auth-signout', async () => {
+  irisAuth.signOut();
+});
+ipcMain.handle('iris-auth-status', async () => {
+  return irisAuth.status();
+});
+
+let irisLoginWindow: BrowserWindow | null = null;
+
+function openIrisLoginWindow(): void {
+  if (irisLoginWindow && !irisLoginWindow.isDestroyed()) {
+    irisLoginWindow.focus();
+    return;
+  }
+  irisLoginWindow = new BrowserWindow({
+    width: 380,
+    height: 460,
+    resizable: false,
+    minimizable: false,
+    maximizable: false,
+    title: 'Sign in to Iris',
+    webPreferences: { preload: path.join(__dirname, 'preload.js') },
+  });
+  irisLoginWindow.setMenuBarVisibility(false);
+  irisLoginWindow.on('closed', () => {
+    irisLoginWindow = null;
+  });
+  // Self-contained login page; uses the shared preload's window.electron bridge.
+  // Credentials go straight to Google Identity Toolkit from the main process
+  // (see irisAuth), never through our gateway.
+  const html = `<!doctype html><html><head><meta charset="utf-8">
+<meta http-equiv="Content-Security-Policy" content="default-src 'none'; style-src 'unsafe-inline'; script-src 'unsafe-inline'">
+<style>
+  body{font:14px system-ui,-apple-system,Segoe UI,sans-serif;margin:0;padding:28px;color:#101828;background:#f6f7f9}
+  h1{font-size:18px;margin:0 0 4px}
+  p.sub{margin:0 0 20px;color:#4A5565;font-size:12px}
+  label{display:block;font-size:12px;color:#4A5565;margin:14px 0 4px}
+  input{width:100%;box-sizing:border-box;padding:10px 12px;border:1px solid #E5E7EB;border-radius:8px;font-size:14px}
+  button{width:100%;margin-top:20px;padding:10px;border:0;border-radius:8px;background:#101828;color:#fff;font-size:14px;cursor:pointer}
+  button:disabled{opacity:.6;cursor:default}
+  .msg{margin-top:14px;font-size:12px;min-height:16px}
+  .err{color:#C70036}.ok{color:#007A55}
+</style></head><body>
+  <h1>Sign in to Iris</h1>
+  <p class="sub">Your Optispan staff account. Credentials go directly to Google — never to our servers.</p>
+  <div id="signedIn" style="display:none">
+    <p class="ok" id="whoami"></p>
+    <button id="signout">Sign out</button>
+  </div>
+  <form id="form">
+    <label for="email">Email</label>
+    <input id="email" type="email" autocomplete="username" required>
+    <label for="password">Password</label>
+    <input id="password" type="password" autocomplete="current-password" required>
+    <button id="submit" type="submit">Sign in</button>
+    <div class="msg" id="msg"></div>
+  </form>
+<script>
+  const api = window.electron;
+  const form = document.getElementById('form');
+  const signedIn = document.getElementById('signedIn');
+  const msg = document.getElementById('msg');
+  async function refreshStatus(){
+    try{
+      const s = await api.irisAuthStatus();
+      if(s && s.signedIn){
+        form.style.display='none'; signedIn.style.display='block';
+        document.getElementById('whoami').textContent = 'Signed in' + (s.email?(' as '+s.email):'') + '.';
+      } else { form.style.display='block'; signedIn.style.display='none'; }
+    }catch(e){}
+  }
+  form.addEventListener('submit', async (e)=>{
+    e.preventDefault();
+    const btn=document.getElementById('submit'); btn.disabled=true;
+    msg.className='msg'; msg.textContent='Signing in…';
+    try{
+      const r = await api.irisSignIn(document.getElementById('email').value, document.getElementById('password').value);
+      msg.className='msg ok'; msg.textContent='Signed in as '+r.email+'.';
+      await refreshStatus();
+    }catch(err){ msg.className='msg err'; msg.textContent=(err&&err.message)?err.message:String(err); }
+    finally{ btn.disabled=false; }
+  });
+  document.getElementById('signout').addEventListener('click', async ()=>{
+    await api.irisSignOut(); await refreshStatus();
+  });
+  refreshStatus();
+</script></body></html>`;
+  void irisLoginWindow.loadURL('data:text/html;charset=utf-8,' + encodeURIComponent(html));
+}
+
+ipcMain.handle('iris-auth-open-login', async () => {
+  openIrisLoginWindow();
 });
 
 async function getAllowList(): Promise<string[]> {

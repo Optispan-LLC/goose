@@ -111,6 +111,9 @@ type ElectronAPI = {
   showSaveDialog: (options: SaveDialogOptions) => Promise<SaveDialogResponse>;
   openInChrome: (url: string) => void;
   reloadApp: () => void;
+  irisSignIn: (email: string, password: string) => Promise<{ email: string }>;
+  irisSignOut: () => Promise<void>;
+  irisAuthStatus: () => Promise<{ signedIn: boolean; email: string | null }>;
   checkForOllama: () => Promise<boolean>;
   selectFileOrDirectory: (defaultPath?: string) => Promise<string | null>;
   selectImportSessionFile: () => Promise<{
@@ -213,6 +216,10 @@ const electronAPI: ElectronAPI = {
   showSaveDialog: (options: SaveDialogOptions) => ipcRenderer.invoke('show-save-dialog', options),
   openInChrome: (url: string) => ipcRenderer.send('open-in-chrome', url),
   reloadApp: () => ipcRenderer.send('reload-app'),
+  irisSignIn: (email: string, password: string) =>
+    ipcRenderer.invoke('iris-auth-signin', email, password),
+  irisSignOut: () => ipcRenderer.invoke('iris-auth-signout'),
+  irisAuthStatus: () => ipcRenderer.invoke('iris-auth-status'),
   checkForOllama: () => ipcRenderer.invoke('check-ollama'),
 
   selectFileOrDirectory: (defaultPath?: string) =>
