@@ -63,6 +63,30 @@ pub struct FileDocumentParams {
     pub category: Option<String>,
 }
 
+/// Decode a response body to text, transparently decompressing zstd or gzip when
+/// the bytes are so framed. The proxy chain (Cloud Run GFE + the gateway)
+/// compresses responses — currently zstd — and the gateway strips the response
+/// Content-Encoding header (_RESP_STRIP), so the compressed body arrives
+/// UNLABELED and no client can auto-decompress it. Detecting the magic bytes and
+/// inflating here is robust regardless of what the proxy negotiates.
+fn decode_body(bytes: &[u8]) -> String {
+    // zstd: magic 28 b5 2f fd
+    if bytes.len() >= 4 && bytes[..4] == [0x28, 0xb5, 0x2f, 0xfd] {
+        if let Ok(out) = zstd::decode_all(bytes) {
+            return String::from_utf8_lossy(&out).into_owned();
+        }
+    }
+    // gzip: magic 1f 8b
+    if bytes.len() >= 2 && bytes[0] == 0x1f && bytes[1] == 0x8b {
+        use std::io::Read as _;
+        let mut out = String::new();
+        if flate2::read::GzDecoder::new(bytes).read_to_string(&mut out).is_ok() {
+            return out;
+        }
+    }
+    String::from_utf8_lossy(bytes).into_owned()
+}
+
 /// Cap an upstream response body before putting it in an error string. Apollo
 /// error bodies can carry PHI; error strings may reach telemetry/logs, so keep
 /// only a short, bounded prefix for debugging rather than the whole body.
@@ -159,25 +183,45 @@ impl IrisServer {
                 None,
             ));
         }
+        let token = self.current_token().ok_or_else(|| {
+            ErrorData::new(
+                ErrorCode::INVALID_REQUEST,
+                "Not signed in to Iris — open the 'Sign in to Iris' window and try again.".to_string(),
+                None,
+            )
+        })?;
         let url = format!("{}{}", self.api_base.trim_end_matches('/'), path);
-        let mut req = self.http.get(&url);
-        if let Some(t) = self.current_token() {
-            req = req.bearer_auth(t);
-        }
-        let resp = req.send().await.map_err(|e| {
+        let resp = self.http.get(&url).bearer_auth(token).send().await.map_err(|e| {
             ErrorData::new(ErrorCode::INTERNAL_ERROR, format!("request failed: {e}"), None)
         })?;
         let status = resp.status();
-        let body = resp.text().await.unwrap_or_default();
+        let ctype = resp
+            .headers()
+            .get(reqwest::header::CONTENT_TYPE)
+            .and_then(|v| v.to_str().ok())
+            .unwrap_or("")
+            .to_string();
+        let raw = resp.bytes().await.map_err(|e| {
+            ErrorData::new(ErrorCode::INTERNAL_ERROR, format!("failed to read response body: {e}"), None)
+        })?;
+        let body = decode_body(&raw);
         if !status.is_success() {
             return Err(ErrorData::new(
                 ErrorCode::INTERNAL_ERROR,
-                format!("Apollo returned {status}: {}", err_snippet(&body)),
+                format!("Apollo returned {status} (ct={ctype}): {}", err_snippet(&body)),
                 None,
             ));
         }
         serde_json::from_str(&body).map_err(|e| {
-            ErrorData::new(ErrorCode::INTERNAL_ERROR, format!("invalid JSON from Apollo: {e}"), None)
+            ErrorData::new(
+                ErrorCode::INTERNAL_ERROR,
+                format!(
+                    "invalid JSON from Apollo (status {status}, ct={ctype}, len={}): {e} — body starts: {}",
+                    body.len(),
+                    err_snippet(&body)
+                ),
+                None,
+            )
         })
     }
 
@@ -186,16 +230,19 @@ impl IrisServer {
         if self.api_base.is_empty() {
             return Err(ErrorData::new(ErrorCode::INTERNAL_ERROR, "IRIS_API_BASE is not set".to_string(), None));
         }
+        let token = self.current_token().ok_or_else(|| {
+            ErrorData::new(
+                ErrorCode::INVALID_REQUEST,
+                "Not signed in to Iris — open the 'Sign in to Iris' window and try again.".to_string(),
+                None,
+            )
+        })?;
         let url = format!("{}{}", self.api_base.trim_end_matches('/'), path);
-        let mut req = self.http.post(&url).json(body);
-        if let Some(t) = self.current_token() {
-            req = req.bearer_auth(t);
-        }
-        let resp = req.send().await.map_err(|e| {
+        let resp = self.http.post(&url).json(body).bearer_auth(token).send().await.map_err(|e| {
             ErrorData::new(ErrorCode::INTERNAL_ERROR, format!("request failed: {e}"), None)
         })?;
         let status = resp.status();
-        let text = resp.text().await.unwrap_or_default();
+        let text = decode_body(&resp.bytes().await.unwrap_or_default());
         if !status.is_success() {
             return Err(ErrorData::new(ErrorCode::INTERNAL_ERROR, format!("Apollo returned {status}: {}", err_snippet(&text)), None));
         }

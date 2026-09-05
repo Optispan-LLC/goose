@@ -41,6 +41,15 @@ function tokenFilePath(): string {
 }
 
 function refreshStorePath(): string {
+  // Co-located with the ID-token file (same Block/goose/config dir) so all Iris
+  // auth state lives together and is independent of the Electron productName —
+  // app.getPath('userData') is derived from productName, so a rename would
+  // otherwise orphan this file.
+  return path.join(app.getPath('appData'), 'Block', 'goose', 'config', 'iris_refresh_token.enc');
+}
+
+// Previous location (Electron userData); read once for one-time migration.
+function legacyRefreshStorePath(): string {
   return path.join(app.getPath('userData'), 'iris_refresh_token.enc');
 }
 
@@ -73,13 +82,18 @@ function persistRefreshToken(refreshToken: string, email: string): void {
     return;
   }
   const blob = safeStorage.encryptString(JSON.stringify({ refreshToken, email }));
+  fs.mkdirSync(path.dirname(refreshStorePath()), { recursive: true });
   fs.writeFileSync(refreshStorePath(), blob, { mode: 0o600 });
 }
 
 function loadPersistedRefreshToken(): { refreshToken: string; email: string } | null {
   try {
     if (!safeStorage.isEncryptionAvailable()) return null;
-    const blob = fs.readFileSync(refreshStorePath());
+    let p = refreshStorePath();
+    if (!fs.existsSync(p) && fs.existsSync(legacyRefreshStorePath())) {
+      p = legacyRefreshStorePath(); // one-time read from the old userData location
+    }
+    const blob = fs.readFileSync(p);
     const parsed = JSON.parse(safeStorage.decryptString(blob));
     if (parsed?.refreshToken) return parsed;
   } catch {
@@ -89,10 +103,13 @@ function loadPersistedRefreshToken(): { refreshToken: string; email: string } | 
 }
 
 function clearPersistedRefreshToken(): void {
-  try {
-    fs.rmSync(refreshStorePath(), { force: true });
-  } catch {
-    // best-effort
+  // Remove both the current and legacy locations so sign-out fully clears state.
+  for (const p of [refreshStorePath(), legacyRefreshStorePath()]) {
+    try {
+      fs.rmSync(p, { force: true });
+    } catch {
+      // best-effort
+    }
   }
 }
 

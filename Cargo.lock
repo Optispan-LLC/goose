@@ -5484,6 +5484,7 @@ dependencies = [
  "chrono",
  "docx-rs",
  "etcetera",
+ "flate2",
  "image 0.24.9",
  "include_dir",
  "indoc",
@@ -5502,6 +5503,7 @@ dependencies = [
  "tracing-appender",
  "tracing-subscriber",
  "umya-spreadsheet",
+ "zstd",
 ]
 
 [[package]]
