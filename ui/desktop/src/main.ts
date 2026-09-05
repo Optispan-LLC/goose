@@ -3177,9 +3177,19 @@ app.whenReady().then(async () => {
 // the app never set one), so if there's no live session we open the login window
 // directly. Once signed in, the stored refresh token suppresses this.
 app.whenReady().then(async () => {
+  // The reliable way back in when a token can't be refreshed: reopen login.
+  irisAuth.setOnReauthNeeded(() => openIrisLoginWindow());
   await irisAuth.initOnStartup();
-  if (!irisAuth.status().signedIn) {
+  // Gate on a *usable* token, not merely on having a refresh token — otherwise a
+  // dead session looks "signed in" and never re-prompts (the lockout we hit).
+  if (!irisAuth.hasValidToken()) {
     openIrisLoginWindow();
+  }
+  // Always-available manual entry point, since the native Help menu doesn't render.
+  try {
+    globalShortcut.register('CommandOrControl+Alt+I', () => openIrisLoginWindow());
+  } catch (e) {
+    console.error('Failed to register Iris sign-in shortcut:', e);
   }
 });
 
@@ -3218,6 +3228,13 @@ function openIrisLoginWindow(): void {
   });
   irisLoginWindow.on('closed', () => {
     irisLoginWindow = null;
+    // Bring the chat window forward so the user isn't left alt-tabbing for it.
+    const main = BrowserWindow.getAllWindows().find((w) => !w.isDestroyed());
+    if (main) {
+      if (main.isMinimized()) main.restore();
+      main.show();
+      main.focus();
+    }
   });
   // Self-contained login page; uses the shared preload's window.electron bridge.
   // Credentials go straight to Google Identity Toolkit from the main process

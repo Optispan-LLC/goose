@@ -61,6 +61,29 @@ interface AuthState {
 const state: AuthState = { email: null, refreshToken: null };
 let refreshTimer: ReturnType<typeof setTimeout> | null = null;
 
+const RETRY_SECONDS = 60; // after a transient refresh failure, try again soon
+
+// Called when the session can no longer produce a valid token and the user must
+// sign in again (refresh token rejected, or none available). main.ts wires this
+// to open the login window — the reliable way back in when a token dies.
+let onReauthNeeded: (() => void) | null = null;
+export function setOnReauthNeeded(cb: () => void): void {
+  onReauthNeeded = cb;
+}
+function requestReauth(): void {
+  try {
+    onReauthNeeded?.();
+  } catch (e) {
+    console.error('[irisAuth] reauth handler error:', e);
+  }
+}
+function scheduleRetry(): void {
+  if (refreshTimer) clearTimeout(refreshTimer);
+  refreshTimer = setTimeout(() => {
+    void refreshNow();
+  }, RETRY_SECONDS * 1000);
+}
+
 function writeTokenFile(idToken: string): void {
   const p = tokenFilePath();
   fs.mkdirSync(path.dirname(p), { recursive: true });
@@ -141,11 +164,18 @@ export async function signIn(email: string, password: string): Promise<{ email: 
   return { email: state.email! };
 }
 
-/** Refresh the ID token from the stored refresh token; rewrites the token file. */
+/** Refresh the ID token from the stored refresh token; rewrites the token file.
+ *  On a hard failure (refresh token rejected) it clears the session and asks for
+ *  re-auth; on a transient failure it schedules a short retry — either way the
+ *  session never silently rots into an unusable-but-"signed in" state. */
 export async function refreshNow(): Promise<boolean> {
-  const rt = state.refreshToken || loadPersistedRefreshToken()?.refreshToken || null;
-  const email = state.email || loadPersistedRefreshToken()?.email || null;
-  if (!rt) return false;
+  const persisted = loadPersistedRefreshToken();
+  const rt = state.refreshToken || persisted?.refreshToken || null;
+  const email = state.email || persisted?.email || null;
+  if (!rt) {
+    requestReauth();
+    return false;
+  }
   try {
     const resp = await fetch(`${SECURE_TOKEN}?key=${FIREBASE_API_KEY}`, {
       method: 'POST',
@@ -154,11 +184,15 @@ export async function refreshNow(): Promise<boolean> {
     });
     const data = await resp.json();
     if (!resp.ok) {
-      // A hard failure (revoked/expired refresh token) means the session is over.
       const code = data?.error?.message || `HTTP ${resp.status}`;
       if (resp.status === 400 || resp.status === 401 || resp.status === 403) {
+        // Refresh token revoked/expired — the session is over. Clear and re-prompt.
+        console.error('[irisAuth] refresh token rejected, re-auth needed:', code);
         signOut();
+        requestReauth();
+        return false;
       }
+      // Transient (5xx/network-ish) — keep the session, retry shortly.
       throw new Error(`Token refresh failed: ${code}`);
     }
     writeTokenFile(data.id_token);
@@ -166,10 +200,12 @@ export async function refreshNow(): Promise<boolean> {
     state.refreshToken = data.refresh_token || rt; // Google rotates the refresh token
     persistRefreshToken(state.refreshToken!, email || '');
     scheduleRefresh(Number(data.expires_in) || 3600);
+    console.info('[irisAuth] ID token refreshed');
     return true;
   } catch (err) {
-    // Leave any existing token file in place until it naturally expires.
-    console.error('[irisAuth] refresh error:', err);
+    // Transient failure: do NOT give up — retry soon so a blip self-heals.
+    console.error(`[irisAuth] refresh error (retrying in ${RETRY_SECONDS}s):`, err);
+    scheduleRetry();
     return false;
   }
 }
@@ -186,13 +222,28 @@ export function signOut(): void {
   clearPersistedRefreshToken();
 }
 
-/** On app start: if a refresh token is stored, mint a fresh ID token file immediately. */
+/** On app start: if a refresh token is stored, mint a fresh ID token file. If
+ *  that fails (can't produce a usable token), ask for re-auth rather than
+ *  leaving a dead session that still looks "signed in". */
 export async function initOnStartup(): Promise<void> {
   const stored = loadPersistedRefreshToken();
-  if (!stored) return;
+  if (!stored) return; // no session — main.ts opens login via !signedIn
   state.email = stored.email;
   state.refreshToken = stored.refreshToken;
-  await refreshNow();
+  const ok = await refreshNow();
+  if (!ok) requestReauth();
+}
+
+/** True only when we currently hold a usable (non-expired) ID token file. */
+export function hasValidToken(): boolean {
+  try {
+    const raw = fs.readFileSync(tokenFilePath(), 'utf8').trim();
+    if (!raw) return false;
+    const payload = JSON.parse(Buffer.from(raw.split('.')[1] + '==', 'base64').toString('utf8'));
+    return typeof payload.exp === 'number' && payload.exp * 1000 > Date.now() + 30_000;
+  } catch {
+    return false;
+  }
 }
 
 export function status(): { signedIn: boolean; email: string | null } {
